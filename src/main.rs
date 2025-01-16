@@ -19,6 +19,14 @@ fn main() -> ExitCode {
             "echo" => {
                 println!("{}", commands[1..].join(" "));
             }
+            "type" => match commands[1] {
+                "echo" | "exit" | "type" => {
+                    println!("{} is a shell builtin", commands[1]);
+                }
+                _ => {
+                    println!("{}: not found", commands[1]);
+                }
+            },
             _ => {
                 println!("{}: command not found", trimed_input.trim());
             }
