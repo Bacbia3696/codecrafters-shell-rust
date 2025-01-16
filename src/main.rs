@@ -1,7 +1,8 @@
 #[allow(unused_imports)]
 use std::io::{self, Write};
+use std::process::ExitCode;
 
-fn main() {
+fn main() -> ExitCode {
     // Wait for user input
     loop {
         print!("$ ");
@@ -9,7 +10,11 @@ fn main() {
         let stdin = io::stdin();
         let mut input = String::new();
         stdin.read_line(&mut input).unwrap();
-        println!("{}: command not found", input.trim());
+        let trimed_input = input.trim();
+        if trimed_input == "exit 0" {
+            return ExitCode::from(0);
+        }
+        println!("{}: command not found", trimed_input.trim());
         io::stdout().flush().unwrap();
     }
 }
