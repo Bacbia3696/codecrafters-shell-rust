@@ -14,7 +14,15 @@ fn main() -> ExitCode {
         if trimed_input == "exit 0" {
             return ExitCode::from(0);
         }
-        println!("{}: command not found", trimed_input.trim());
+        let commands = trimed_input.split_whitespace().collect::<Vec<_>>();
+        match commands[0] {
+            "echo" => {
+                println!("{}", commands[1..].join(" "));
+            }
+            _ => {
+                println!("{}: command not found", trimed_input.trim());
+            }
+        }
         io::stdout().flush().unwrap();
     }
 }
