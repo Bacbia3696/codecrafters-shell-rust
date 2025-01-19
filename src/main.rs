@@ -1,7 +1,8 @@
 #[allow(unused_imports)]
 use std::io::{self, Write};
 use std::{
-    env, fs,
+    env::{self},
+    fs,
     path::Path,
     process::{Command, ExitCode},
 };
@@ -27,7 +28,14 @@ fn main() -> ExitCode {
                 println!("{}", current_dir.to_string_lossy());
             }
             "cd" => {
-                let new_dir = Path::new(commands[1]);
+                let mut new_dir_str = commands[1].to_string();
+                if commands[1] == "~" {
+                    if let Some(home_dir) = env::home_dir() {
+                        let home_dir_str = home_dir.to_string_lossy();
+                        new_dir_str = home_dir_str.to_string();
+                    }
+                }
+                let new_dir = Path::new(&new_dir_str);
                 if env::set_current_dir(new_dir).is_err() {
                     eprintln!("cd: {}: No such file or directory", commands[1])
                 }
