@@ -21,8 +21,12 @@ fn main() -> ExitCode {
             "exit" => {
                 return ExitCode::from(0);
             }
+            "pwd" => {
+                let current_dir = env::current_dir().expect("can get current dir");
+                println!("{}", current_dir.to_string_lossy());
+            }
             "type" => match commands[1] {
-                "echo" | "exit" | "type" => {
+                "echo" | "exit" | "type" | "pwd" => {
                     println!("{} is a shell builtin", commands[1]);
                 }
                 _ => match find_command_path(commands[1]) {
