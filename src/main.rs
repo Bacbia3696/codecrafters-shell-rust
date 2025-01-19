@@ -2,6 +2,7 @@
 use std::io::{self, Write};
 use std::{
     env, fs,
+    path::Path,
     process::{Command, ExitCode},
 };
 
@@ -25,8 +26,14 @@ fn main() -> ExitCode {
                 let current_dir = env::current_dir().expect("can get current dir");
                 println!("{}", current_dir.to_string_lossy());
             }
+            "cd" => {
+                let new_dir = Path::new(commands[1]);
+                if env::set_current_dir(new_dir).is_err() {
+                    eprintln!("cd: {}: No such file or directory", commands[1])
+                }
+            }
             "type" => match commands[1] {
-                "echo" | "exit" | "type" | "pwd" => {
+                "echo" | "exit" | "type" | "pwd" | "cd" => {
                     println!("{} is a shell builtin", commands[1]);
                 }
                 _ => match find_command_path(commands[1]) {
