@@ -17,16 +17,13 @@ fn main() -> ExitCode {
             continue;
         }
         let input = input.trim();
-        if input.is_empty() {
-            continue;
-        }
-
-        let commands: Vec<&str> = input.split_whitespace().collect();
+        let commands: Vec<String> = shell_words::split(input).expect("Failed to parsed command");
         if commands.is_empty() {
+            println!();
             continue;
         }
 
-        match commands[0] {
+        match commands[0].as_str() {
             "echo" => {
                 // Print even if there are no additional arguments.
                 println!("{}", commands[1..].join(" "));
@@ -52,8 +49,8 @@ fn main() -> ExitCode {
                     }
                 }
                 let new_dir = Path::new(&new_dir_str);
-                if let Err(e) = env::set_current_dir(new_dir) {
-                    eprintln!("cd: {}: {}", commands[1], e);
+                if env::set_current_dir(new_dir).is_err() {
+                    eprintln!("cd: {}: No such file or directory", commands[1]);
                 }
             }
             "type" => {
@@ -61,11 +58,11 @@ fn main() -> ExitCode {
                     eprintln!("type: missing operand");
                     continue;
                 }
-                match commands[1] {
+                match commands[1].as_str() {
                     "echo" | "exit" | "type" | "pwd" | "cd" => {
                         println!("{} is a shell builtin", commands[1]);
                     }
-                    _ => match find_command_path(commands[1]) {
+                    _ => match find_command_path(&commands[1]) {
                         Some(command_path) => {
                             println!("{} is {}", commands[1], command_path);
                         }
