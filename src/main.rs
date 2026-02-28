@@ -10,7 +10,6 @@ use rustyline::CompletionType;
 use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;
 use rustyline::{Config, Editor, Result};
-use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::process::{Command, Stdio};
 use tokenize::tokenize;
 
@@ -90,137 +89,142 @@ fn execute_external(
     let mut command = Command::new(cmd);
     command.args(&args[1..]);
 
-    // Handle stderr redirection
-    if let Some(ref redirection) = parsed.redirect_stderr {
-        let file_result = if redirection.append {
-            std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&redirection.file)
-        } else {
-            std::fs::File::create(&redirection.file)
-        };
-        if let Ok(file) = file_result {
+    if let Some(ref r) = parsed.redirect_stderr {
+        if let Ok(file) = open_file(&r.file, r.append) {
             command.stderr(file);
         }
     }
 
-    // Handle stdout redirection
-    if let Some(ref redirection) = parsed.redirect_stdout {
-        let file_result = if redirection.append {
-            std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&redirection.file)
-        } else {
-            std::fs::File::create(&redirection.file)
-        };
-        if let Ok(file) = file_result {
+    if let Some(ref r) = parsed.redirect_stdout {
+        if let Ok(file) = open_file(&r.file, r.append) {
             command.stdout(file);
-            // For stdout redirection, return empty string (output goes to file)
-            match command.status() {
-                Ok(_) => return Ok(String::new()),
-                Err(_) => return Err(format!("{}: command not found", cmd)),
-            }
+            return match command.status() {
+                Ok(_) => Ok(String::new()),
+                Err(_) => Err(format!("{}: command not found", cmd)),
+            };
         }
     }
 
-    // For interactive commands (no redirection), inherit stdout/stderr for streaming
-    // This allows commands like `tail -f` to work correctly
     match command.status() {
         Ok(_) => Ok(String::new()),
         Err(_) => Err(format!("{}: command not found", cmd)),
     }
 }
 
+fn open_file(path: &str, append: bool) -> std::result::Result<std::fs::File, std::io::Error> {
+    if append {
+        std::fs::OpenOptions::new().create(true).append(true).open(path)
+    } else {
+        std::fs::File::create(path)
+    }
+}
+
 /// Executes a pipeline of commands, connecting stdout of each to stdin of the next.
 fn execute_pipeline(commands: &[redirection::ParsedCommand]) -> std::result::Result<(), String> {
     use std::io::{Read, Write};
-    
+
     if commands.is_empty() {
         return Ok(());
     }
 
+    let last = commands.last().unwrap();
     let mut children: Vec<std::process::Child> = Vec::new();
-    let mut prev_stdout: Option<std::os::unix::io::RawFd> = None;
-    let last_command = commands.last().unwrap();
+    let mut prev_stdout: Option<std::process::ChildStdout> = None;
 
     for (i, parsed) in commands.iter().enumerate() {
         let is_last = i == commands.len() - 1;
         let cmd = &parsed.args[0];
-        let args = &parsed.args[1..];
 
-        let mut command = Command::new(cmd);
-        command.args(args);
-
-        // Set up stdin from previous command's stdout
-        if let Some(fd) = prev_stdout {
-            unsafe {
-                command.stdin(Stdio::from_raw_fd(fd));
+        if BUILTINS.contains(&cmd.as_str()) {
+            // Wait for all previous children to complete
+            for child in &mut children {
+                let _ = child.wait();
             }
-        } else {
-            command.stdin(Stdio::inherit());
-        }
+            children.clear();
 
-        if is_last {
-            // Last command - handle stdout redirection or capture for streaming
-            if let Some(ref redirection) = last_command.redirect_stdout {
-                let file_result = if redirection.append {
-                    std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(&redirection.file)
-                } else {
-                    std::fs::File::create(&redirection.file)
-                };
-                if let Ok(file) = file_result {
-                    command.stdout(file);
+            // Consume previous stdout (builtins don't read stdin)
+            drop(prev_stdout.take());
+
+            // Execute builtin
+            let output = execute_builtin(cmd, &parsed.args);
+
+            if is_last {
+                if let Some(ref r) = last.redirect_stdout {
+                    if let Ok(content) = &output {
+                        let _ = redirection::write_to_file(&r.file, content, r.append);
+                    }
+                } else if let Ok(content) = &output {
+                    print!("{}", content);
                 }
             } else {
-                // Capture stdout for streaming
-                command.stdout(Stdio::piped());
+                // For builtin -> external, buffer output and feed via cat
+                if let Ok(content) = &output {
+                    let data = content.as_bytes().to_vec();
+                    let mut feeder = Command::new("cat")
+                        .stdin(Stdio::piped())
+                        .stdout(Stdio::piped())
+                        .spawn()
+                        .map_err(|_| "Failed to spawn cat".to_string())?;
+                    
+                    if let Some(mut stdin) = feeder.stdin.take() {
+                        let _ = stdin.write_all(&data);
+                    }
+                    
+                    prev_stdout = feeder.stdout.take();
+                    children.push(feeder);
+                }
             }
         } else {
-            // Intermediate command - pipe stdout to next command
-            command.stdout(Stdio::piped());
+            // External command
+            let mut command = Command::new(cmd);
+            command.args(&parsed.args[1..]);
+
+            // Set up stdin from previous command
+            if let Some(stdout) = prev_stdout.take() {
+                command.stdin(Stdio::from(stdout));
+            } else if i > 0 {
+                command.stdin(Stdio::inherit());
+            }
+
+            // Set up stdout
+            if is_last {
+                if let Some(ref r) = last.redirect_stdout {
+                    if let Ok(file) = open_file(&r.file, r.append) {
+                        command.stdout(file);
+                    }
+                } else {
+                    command.stdout(Stdio::piped());
+                }
+            } else {
+                command.stdout(Stdio::piped());
+            }
+
+            let mut child = command.spawn()
+                .map_err(|_| format!("{}: command not found", cmd))?;
+
+            if !is_last {
+                prev_stdout = child.stdout.take();
+            }
+            children.push(child);
         }
-
-        let mut child = command.spawn()
-            .map_err(|_| format!("{}: command not found", cmd))?;
-
-        // Save stdout fd for next command
-        if !is_last
-            && let Some(stdout) = child.stdout.take()
-        {
-            prev_stdout = Some(stdout.as_raw_fd());
-            // Don't drop stdout - we need it for the next command
-            std::mem::forget(stdout);
-        }
-
-        children.push(child);
     }
 
     // Stream output from last command if not redirected
-    if let Some(last_child) = children.last_mut()
-        && last_command.redirect_stdout.is_none()
+    if let Some(last_parsed) = commands.last()
+        && last_parsed.redirect_stdout.is_none()
+        && let Some(last_child) = children.last_mut()
         && let Some(mut stdout) = last_child.stdout.take()
     {
-        // Copy stdout to shell's stdout in real-time
-        let mut buffer = [0u8; 1024];
-        loop {
-            match stdout.read(&mut buffer) {
-                Ok(0) => break, // EOF
-                Ok(n) => {
-                    let _ = std::io::stdout().write_all(&buffer[..n]);
-                    let _ = std::io::stdout().flush();
-                }
-                Err(_) => break,
-            }
+        let mut buf = [0u8; 1024];
+        while let Ok(n) = stdout.read(&mut buf) {
+            if n == 0 { break; }
+            let _ = std::io::stdout().write_all(&buf[..n]);
+            let _ = std::io::stdout().flush();
         }
     }
 
-    // Wait for all children to complete
-    for child in children.iter_mut() {
+    // Wait for remaining children
+    for child in &mut children {
         let _ = child.wait();
     }
 
