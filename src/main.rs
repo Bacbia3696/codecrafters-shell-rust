@@ -9,9 +9,17 @@ fn main() {
         io::stdin()
             .read_line(&mut command)
             .expect("Failed to read line");
-        if command.trim() == "exit" {
-            break;
+        let command: Vec<_> = command.split_whitespace().collect();
+        if command.is_empty() {
+            continue;
         }
-        println!("{}: command not found", command.trim());
+        match command[0] {
+            "exit" => break,
+            "echo" => {
+                let output = command[1..].join(" ");
+                println!("{}", output);
+            }
+            _ => println!("{}: command not found", command[0]),
+        }
     }
 }
