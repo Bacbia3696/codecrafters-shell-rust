@@ -6,7 +6,7 @@ edition = "2024"
 rust-version = "1.91"
 
 [dependencies]
-anyhow = "1.0.68"    # error handling
+anyhow = "1.0.102"   # error handling
 bytes = "1.3.0"      # helps manage buffers
-thiserror = "1.0.38" # error handling
-rustyline = "14.0"   # readline with history support
+thiserror = "2.0.18" # error handling
+rustyline = "17.0"   # readline with history support

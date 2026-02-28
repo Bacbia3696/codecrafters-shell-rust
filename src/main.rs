@@ -23,6 +23,7 @@ fn main() -> Result<()> {
 
     let mut rl: Editor<ShellCompleter, DefaultHistory> = Editor::with_config(config)?;
     rl.set_helper(Some(completer));
+    let _ = rl.history_mut().ignore_dups(false);
     let _ = rl.history_mut().clear();
 
     loop {
@@ -57,8 +58,15 @@ fn main() -> Result<()> {
                                         }
                                     }
                                 }
+                            } else if flag == "-w" {
+                                // Write history to file
+                                if let Some(path) = parsed.args.get(2) {
+                                    let mut content: String = rl.history().iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n");
+                                    content.push('\n');
+                                    let _ = std::fs::write(path, content);
+                                }
                             } else {
-                                // Not -r flag, so display history
+                                // Not -r or -w flag, so display history
                                 display_history(&rl, parsed.args.get(1));
                             }
                         } else {
