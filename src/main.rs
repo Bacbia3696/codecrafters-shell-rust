@@ -2,9 +2,9 @@ use rustyline::completion::{Completer, FilenameCompleter, Pair};
 use rustyline::error::ReadlineError;
 use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
+use rustyline::history::DefaultHistory;
 use rustyline::validate::Validator;
 use rustyline::{Editor, Helper};
-use rustyline::history::DefaultHistory;
 use std::env;
 
 #[cfg(unix)]
@@ -22,16 +22,17 @@ impl Completer for ShellCompleter {
         &self,
         line: &str,
         pos: usize,
-        _ctx: &rustyline::Context<'_>,
+        ctx: &rustyline::Context<'_>,
     ) -> Result<(usize, Vec<Self::Candidate>), ReadlineError> {
         let (start, word) = extract_word(line, pos);
-        let mut candidates = Vec::new();
 
-        let tokens: Vec<_> = tokenize(line);
-        let is_first_command = tokens.is_empty() || tokens.len() <= 1;
+        // Check if completing the first word (command)
+        let is_first_word = line[..pos].split_whitespace().count() <= 1;
 
-        // Complete builtins and PATH commands for first word
-        if is_first_command {
+        if is_first_word {
+            let mut candidates = Vec::new();
+
+            // Complete builtins
             for builtin in &self.builtins {
                 if builtin.starts_with(&word) {
                     candidates.push(Pair {
@@ -40,13 +41,15 @@ impl Completer for ShellCompleter {
                     });
                 }
             }
-            // Also complete from PATH
+
+            // Complete PATH binaries
             if let Ok(path) = env::var("PATH") {
                 for dir in path.split(':') {
                     if let Ok(entries) = std::fs::read_dir(dir) {
                         for entry in entries.flatten() {
                             if let Ok(name) = entry.file_name().into_string()
-                                && name.starts_with(&word) {
+                                && name.starts_with(&word)
+                            {
                                 candidates.push(Pair {
                                     display: name.clone(),
                                     replacement: name.clone(),
@@ -56,24 +59,23 @@ impl Completer for ShellCompleter {
                     }
                 }
             }
+
+            candidates.sort_by(|a, b| a.display.cmp(&b.display));
+            candidates.dedup_by(|a, b| a.display == b.display);
+            Ok((start, candidates))
         } else {
-            // Use filename completer for other arguments
-            return self.filename_completer.complete(line, pos, _ctx);
+            // Use filename completer for arguments
+            self.filename_completer.complete(line, pos, ctx)
         }
-
-        // Remove duplicates
-        candidates.sort_by(|a, b| a.display.cmp(&b.display));
-        candidates.dedup_by(|a, b| a.display == b.display);
-
-        Ok((start, candidates))
     }
 }
 
 fn extract_word(line: &str, pos: usize) -> (usize, String) {
     let before = &line[..pos];
-    let start = before.rfind(|c: char| c.is_whitespace()).map_or(0, |i| i + 1);
-    let word = line[start..pos].to_string();
-    (start, word)
+    let start = before
+        .rfind(|c: char| c.is_whitespace())
+        .map_or(0, |i| i + 1);
+    (start, line[start..pos].to_string())
 }
 
 impl Helper for ShellCompleter {}
@@ -84,8 +86,13 @@ impl Highlighter for ShellCompleter {}
 impl Validator for ShellCompleter {}
 
 fn main() -> rustyline::Result<()> {
-    let builtins: Vec<String> = vec!["echo".into(), "exit".into(), "type".into(), "pwd".into(), "cd".into()];
-    let builtins_slice: Vec<&str> = builtins.iter().map(|s| s.as_str()).collect();
+    let builtins: Vec<String> = vec![
+        "echo".into(),
+        "exit".into(),
+        "type".into(),
+        "pwd".into(),
+        "cd".into(),
+    ];
     let completer = ShellCompleter {
         builtins: builtins.clone(),
         filename_completer: FilenameCompleter::new(),
@@ -97,8 +104,7 @@ fn main() -> rustyline::Result<()> {
         let readline = rl.readline("$ ");
         match readline {
             Ok(input) => {
-                let input_str: &str = &input;
-                rl.add_history_entry(input_str)?;
+                rl.add_history_entry(&input)?;
 
                 let command: Vec<_> = tokenize(&input);
                 if command.is_empty() {
@@ -134,7 +140,7 @@ fn main() -> rustyline::Result<()> {
                     "type" => {
                         if command.len() < 2 {
                             println!("type: missing argument");
-                        } else if builtins_slice.contains(&command[1].as_str()) {
+                        } else if builtins.contains(&command[1]) {
                             println!("{} is a shell builtin", command[1]);
                         } else {
                             match full_path(&command[1]) {
