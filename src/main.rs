@@ -26,6 +26,9 @@ fn main() -> Result<()> {
     let _ = rl.history_mut().ignore_dups(false);
     let _ = rl.history_mut().clear();
 
+    // Track the last written history index for history -a
+    let mut last_written_index: usize = 0;
+
     loop {
         let readline = rl.readline("$ ");
         match readline {
@@ -59,11 +62,31 @@ fn main() -> Result<()> {
                                     }
                                 }
                             } else if flag == "-w" {
-                                // Write history to file
+                                // Write all history to file
                                 if let Some(path) = parsed.args.get(2) {
                                     let mut content: String = rl.history().iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n");
                                     content.push('\n');
                                     let _ = std::fs::write(path, content);
+                                    last_written_index = rl.history().len();
+                                }
+                            } else if flag == "-a" {
+                                // Append only new history entries to file
+                                if let Some(path) = parsed.args.get(2) {
+                                    let current_len = rl.history().len();
+                                    if current_len > last_written_index {
+                                        let new_entries: Vec<&str> = rl.history().iter()
+                                            .skip(last_written_index)
+                                            .map(|s| s.as_str())
+                                            .collect();
+                                        let mut content = new_entries.join("\n");
+                                        if !content.is_empty() {
+                                            content.push('\n');
+                                            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                                                let _ = std::io::Write::write_all(&mut file, content.as_bytes());
+                                            }
+                                        }
+                                    }
+                                    last_written_index = rl.history().len();
                                 }
                             } else {
                                 // Not -r or -w flag, so display history
