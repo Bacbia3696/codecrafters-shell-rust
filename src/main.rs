@@ -178,10 +178,16 @@ fn tokenize(input: &str) -> Vec<String> {
     let mut current = String::new();
     let mut in_single_quote = false;
     let mut in_double_quote = false;
-    let chars = input.chars();
+    let mut chars = input.chars().peekable();
 
-    for c in chars {
-        if c == '\'' && !in_double_quote {
+    while let Some(c) = chars.next() {
+        // Handle backslash escape outside quotes
+        if c == '\\' && !in_single_quote && !in_double_quote {
+            if let Some(&next) = chars.peek() {
+                chars.next(); // consume the escaped character
+                current.push(next);
+            }
+        } else if c == '\'' && !in_double_quote {
             in_single_quote = !in_single_quote;
         } else if c == '"' && !in_single_quote {
             in_double_quote = !in_double_quote;
