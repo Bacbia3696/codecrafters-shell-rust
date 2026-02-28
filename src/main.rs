@@ -85,36 +85,65 @@ impl Hinter for ShellCompleter {
 impl Highlighter for ShellCompleter {}
 impl Validator for ShellCompleter {}
 
+struct Redirection {
+    file: String,
+    append: bool,
+}
+
 struct ParsedCommand {
     args: Vec<String>,
-    redirect_to: Option<String>,
+    redirect_stdout: Option<Redirection>,
+    redirect_stderr: Option<Redirection>,
 }
 
 fn parse_command(tokens: Vec<String>) -> ParsedCommand {
     let mut args = Vec::new();
-    let mut redirect_to = None;
+    let mut redirect_stdout = None;
+    let mut redirect_stderr = None;
     let mut i = 0;
 
     while i < tokens.len() {
-        let token = &tokens[i];
-
-        // Check for redirection operators: >, 1>, 2>
-        let is_redirect = token == ">" || token == "1>" || token == "2>";
-
-        if is_redirect {
-            if i + 1 < tokens.len() {
-                redirect_to = Some(tokens[i + 1].clone());
+        match tokens[i].as_str() {
+            ">" | "1>" => {
+                redirect_stdout = tokens.get(i + 1).map(|f| Redirection {
+                    file: f.clone(),
+                    append: false,
+                });
                 i += 2;
-            } else {
+            }
+            ">>" | "1>>" => {
+                redirect_stdout = tokens.get(i + 1).map(|f| Redirection {
+                    file: f.clone(),
+                    append: true,
+                });
+                i += 2;
+            }
+            "2>" => {
+                redirect_stderr = tokens.get(i + 1).map(|f| Redirection {
+                    file: f.clone(),
+                    append: false,
+                });
+                i += 2;
+            }
+            "2>>" => {
+                redirect_stderr = tokens.get(i + 1).map(|f| Redirection {
+                    file: f.clone(),
+                    append: true,
+                });
+                i += 2;
+            }
+            _ => {
+                args.push(tokens[i].clone());
                 i += 1;
             }
-        } else {
-            args.push(token.clone());
-            i += 1;
         }
     }
 
-    ParsedCommand { args, redirect_to }
+    ParsedCommand {
+        args,
+        redirect_stdout,
+        redirect_stderr,
+    }
 }
 
 fn main() -> rustyline::Result<()> {
@@ -194,11 +223,27 @@ fn main() -> rustyline::Result<()> {
                     _ => {
                         let mut cmd = std::process::Command::new(&command[0]);
                         cmd.args(&command[1..]);
+
+                        // Set up stderr redirection if specified
+                        if let Some(ref redirection) = parsed.redirect_stderr {
+                            let file_result = if redirection.append {
+                                std::fs::OpenOptions::new()
+                                    .create(true)
+                                    .append(true)
+                                    .open(&redirection.file)
+                            } else {
+                                std::fs::File::create(&redirection.file)
+                            };
+                            if let Ok(file) = file_result {
+                                cmd.stderr(file);
+                            }
+                        }
+
                         match cmd.output() {
                             Ok(output) => {
                                 let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                                 let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                                if !stderr.is_empty() {
+                                if !stderr.is_empty() && parsed.redirect_stderr.is_none() {
                                     eprint!("{}", stderr);
                                 }
                                 Ok(stdout)
@@ -208,21 +253,60 @@ fn main() -> rustyline::Result<()> {
                     }
                 };
 
+                // Handle stderr redirection for builtins (create file even if no error)
+                // External commands already handle stderr redirection above
+                if matches!(command[0].as_str(), "echo" | "pwd" | "cd" | "type" | "exit")
+                    && let Some(ref redirection) = parsed.redirect_stderr
+                {
+                    let file_result = if redirection.append {
+                        std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&redirection.file)
+                    } else {
+                        std::fs::File::create(&redirection.file)
+                    };
+                    if let Err(e) = file_result {
+                        eprintln!("{}: {}", redirection.file, e);
+                    }
+                }
+
                 // Handle output
                 if let Ok(output) = result {
                     if !output.is_empty() {
-                        if let Some(ref file) = parsed.redirect_to {
-                            if let Err(e) = std::fs::write(file, &output) {
-                                eprintln!("{}: {}", file, e);
+                        if let Some(ref redirection) = parsed.redirect_stdout {
+                            let result = if redirection.append {
+                                std::fs::OpenOptions::new()
+                                    .create(true)
+                                    .append(true)
+                                    .open(&redirection.file)
+                                    .and_then(|mut f| {
+                                        std::io::Write::write_all(&mut f, output.as_bytes())
+                                    })
+                            } else {
+                                std::fs::write(&redirection.file, &output)
+                            };
+                            if let Err(e) = result {
+                                eprintln!("{}: {}", redirection.file, e);
                             }
                         } else {
                             print!("{}", output);
                         }
                     }
                 } else if let Err(e) = result {
-                    if let Some(ref _file) = parsed.redirect_to {
-                        // Redirect stderr to file too? For now, just print to stderr
-                        eprintln!("{}", e);
+                    if let Some(ref redirection) = parsed.redirect_stderr {
+                        let result = if redirection.append {
+                            std::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(&redirection.file)
+                                .and_then(|mut f| std::io::Write::write_all(&mut f, e.as_bytes()))
+                        } else {
+                            std::fs::write(&redirection.file, &e)
+                        };
+                        if let Err(err) = result {
+                            eprintln!("{}: {}", redirection.file, err);
+                        }
                     } else {
                         eprintln!("{}", e);
                     }
@@ -258,18 +342,34 @@ fn tokenize(input: &str) -> Vec<String> {
         } else if c == '"' && !in_single_quote {
             in_double_quote = !in_double_quote;
         } else if c == '>' && !in_single_quote && !in_double_quote {
-            // Handle redirection: check if current ends with a digit (e.g., "1>")
-            if !current.is_empty() && current.chars().last().unwrap().is_ascii_digit() {
-                current.push(c);
+            // Handle redirection: check for >>, 1>>, 2>>, 1>, 2>, or just >
+            let mut redirect_token = String::new();
+
+            // Check if current ends with a digit (e.g., "1" or "2")
+            let has_fd = !current.is_empty() && current.chars().last().unwrap().is_ascii_digit();
+            if has_fd {
+                redirect_token = current.clone();
+                current.clear();
+            }
+
+            // Add the first >
+            redirect_token.push(c);
+
+            // Check for second > (append mode)
+            if let Some(&next) = chars.peek()
+                && next == '>'
+            {
+                chars.next();
+                redirect_token.push(next);
+            }
+
+            // Push any pending token before the redirection
+            if !has_fd && !current.is_empty() {
                 tokens.push(current.clone());
                 current.clear();
-            } else {
-                if !current.is_empty() {
-                    tokens.push(current.clone());
-                    current.clear();
-                }
-                tokens.push(c.to_string());
             }
+
+            tokens.push(redirect_token);
         } else if c.is_whitespace() && !in_single_quote && !in_double_quote {
             if !current.is_empty() {
                 tokens.push(current.clone());
