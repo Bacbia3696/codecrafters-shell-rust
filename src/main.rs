@@ -2,6 +2,7 @@
 use std::io::{self, Write};
 
 fn main() {
+    let builtins = ["echo", "exit", "type"];
     loop {
         print!("$ ");
         io::stdout().flush().unwrap();
@@ -15,6 +16,15 @@ fn main() {
         }
         match command[0] {
             "exit" => break,
+            "type" => {
+                if command.len() < 2 {
+                    println!("type: missing argument");
+                } else if builtins.contains(&command[1]) {
+                    println!("{} is a shell builtin", command[1]);
+                } else {
+                    println!("{}: not found", command[1]);
+                }
+            }
             "echo" => {
                 let output = command[1..].join(" ");
                 println!("{}", output);
