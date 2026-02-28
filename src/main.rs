@@ -23,6 +23,7 @@ fn main() -> Result<()> {
 
     let mut rl: Editor<ShellCompleter, DefaultHistory> = Editor::with_config(config)?;
     rl.set_helper(Some(completer));
+    let _ = rl.history_mut().clear();
 
     loop {
         let readline = rl.readline("$ ");
@@ -45,15 +46,16 @@ fn main() -> Result<()> {
                     let cmd = &parsed.args[0];
                     if cmd == "history" {
                         let limit = parsed.args.get(1).and_then(|n| n.parse::<usize>().ok());
-                        let history = rl.history().iter();
-                        let entries: Vec<_> = if let Some(n) = limit {
-                            history.rev().take(n).collect()
+                        let entries: Vec<&str> = rl.history().iter().map(|s| s.as_str()).collect();
+                        
+                        let start_idx = if let Some(n) = limit {
+                            entries.len().saturating_sub(n)
                         } else {
-                            history.collect()
+                            0
                         };
-                        let start = rl.history().len().saturating_sub(entries.len());
-                        for (i, entry) in entries.iter().enumerate() {
-                            println!("{:>4}  {}", start + i + 1, entry);
+                        
+                        for (i, entry) in entries.iter().enumerate().skip(start_idx) {
+                            println!("{:>4}  {}", i + 1, entry);
                         }
                     } else if BUILTINS.contains(&cmd.as_str()) {
                         let result = execute_builtin(cmd, &parsed.args);
