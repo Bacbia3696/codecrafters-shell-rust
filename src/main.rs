@@ -8,7 +8,7 @@ use completion::ShellCompleter;
 use redirection::{handle_output, parse_pipeline};
 use rustyline::CompletionType;
 use rustyline::error::ReadlineError;
-use rustyline::history::DefaultHistory;
+use rustyline::history::{DefaultHistory, History};
 use rustyline::{Config, Editor, Result};
 use std::process::{Command, Stdio};
 use tokenize::tokenize;
@@ -44,8 +44,16 @@ fn main() -> Result<()> {
                 if commands.len() == 1 && !parsed.args.is_empty() {
                     let cmd = &parsed.args[0];
                     if cmd == "history" {
-                        for (i, entry) in rl.history().iter().enumerate() {
-                            println!("{:>4}  {}", i + 1, entry);
+                        let limit = parsed.args.get(1).and_then(|n| n.parse::<usize>().ok());
+                        let history = rl.history().iter();
+                        let entries: Vec<_> = if let Some(n) = limit {
+                            history.rev().take(n).collect()
+                        } else {
+                            history.collect()
+                        };
+                        let start = rl.history().len().saturating_sub(entries.len());
+                        for (i, entry) in entries.iter().enumerate() {
+                            println!("{:>4}  {}", start + i + 1, entry);
                         }
                     } else if BUILTINS.contains(&cmd.as_str()) {
                         let result = execute_builtin(cmd, &parsed.args);
