@@ -89,20 +89,20 @@ fn execute_external(
     let mut command = Command::new(cmd);
     command.args(&args[1..]);
 
-    if let Some(ref r) = parsed.redirect_stderr {
-        if let Ok(file) = open_file(&r.file, r.append) {
-            command.stderr(file);
-        }
+    if let Some(ref r) = parsed.redirect_stderr
+        && let Ok(file) = open_file(&r.file, r.append)
+    {
+        command.stderr(file);
     }
 
-    if let Some(ref r) = parsed.redirect_stdout {
-        if let Ok(file) = open_file(&r.file, r.append) {
-            command.stdout(file);
-            return match command.status() {
-                Ok(_) => Ok(String::new()),
-                Err(_) => Err(format!("{}: command not found", cmd)),
-            };
-        }
+    if let Some(ref r) = parsed.redirect_stdout
+        && let Ok(file) = open_file(&r.file, r.append)
+    {
+        command.stdout(file);
+        return match command.status() {
+            Ok(_) => Ok(String::new()),
+            Err(_) => Err(format!("{}: command not found", cmd)),
+        };
     }
 
     match command.status() {
@@ -113,7 +113,10 @@ fn execute_external(
 
 fn open_file(path: &str, append: bool) -> std::result::Result<std::fs::File, std::io::Error> {
     if append {
-        std::fs::OpenOptions::new().create(true).append(true).open(path)
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
     } else {
         std::fs::File::create(path)
     }
@@ -165,11 +168,11 @@ fn execute_pipeline(commands: &[redirection::ParsedCommand]) -> std::result::Res
                         .stdout(Stdio::piped())
                         .spawn()
                         .map_err(|_| "Failed to spawn cat".to_string())?;
-                    
+
                     if let Some(mut stdin) = feeder.stdin.take() {
                         let _ = stdin.write_all(&data);
                     }
-                    
+
                     prev_stdout = feeder.stdout.take();
                     children.push(feeder);
                 }
@@ -199,7 +202,8 @@ fn execute_pipeline(commands: &[redirection::ParsedCommand]) -> std::result::Res
                 command.stdout(Stdio::piped());
             }
 
-            let mut child = command.spawn()
+            let mut child = command
+                .spawn()
                 .map_err(|_| format!("{}: command not found", cmd))?;
 
             if !is_last {
@@ -217,7 +221,9 @@ fn execute_pipeline(commands: &[redirection::ParsedCommand]) -> std::result::Res
     {
         let mut buf = [0u8; 1024];
         while let Ok(n) = stdout.read(&mut buf) {
-            if n == 0 { break; }
+            if n == 0 {
+                break;
+            }
             let _ = std::io::stdout().write_all(&buf[..n]);
             let _ = std::io::stdout().flush();
         }
