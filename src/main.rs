@@ -6,10 +6,11 @@ mod tokenize;
 use commands::{BUILTINS, execute_builtin};
 use completion::ShellCompleter;
 use redirection::{handle_output, parse_pipeline};
-use rustyline::CompletionType;
-use rustyline::error::ReadlineError;
-use rustyline::history::{DefaultHistory, History};
-use rustyline::{Config, Editor, Result};
+use rustyline::{
+    CompletionType, Config, Editor, Result,
+    error::ReadlineError,
+    history::{DefaultHistory, History},
+};
 use std::process::{Command, Stdio};
 use tokenize::tokenize;
 
