@@ -25,21 +25,9 @@ fn main() {
                 } else if builtins.contains(&command[1]) {
                     println!("{} is a shell builtin", command[1]);
                 } else {
-                    let paths = env::var("PATH").unwrap_or_default();
-                    let mut found = false;
-                    for path in paths.split(':') {
-                        let full_path = format!("{}/{}", path, command[1]);
-                        if let Ok(metadata) = std::fs::metadata(&full_path)
-                            && metadata.is_file()
-                            && metadata.permissions().mode() & 0o111 != 0
-                        {
-                            println!("{} is {}", command[1], full_path);
-                            found = true;
-                            break;
-                        }
-                    }
-                    if !found {
-                        println!("{}: not found", command[1]);
+                    match full_path(command[1]) {
+                        Some(path) => println!("{} is {}", command[1], path),
+                        None => println!("{}: not found", command[1]),
                     }
                 }
             }
@@ -47,7 +35,36 @@ fn main() {
                 let output = command[1..].join(" ");
                 println!("{}", output);
             }
-            _ => println!("{}: command not found", command[0]),
+            _ => {
+                let output = std::process::Command::new(command[0])
+                    .args(&command[1..])
+                    .output();
+                match output {
+                    Ok(output) => {
+                        if !output.stdout.is_empty() {
+                            print!("{}", String::from_utf8_lossy(&output.stdout));
+                        }
+                        if !output.stderr.is_empty() {
+                            eprint!("{}", String::from_utf8_lossy(&output.stderr));
+                        }
+                    }
+                    Err(_) => eprintln!("{}: command not found", command[0]),
+                }
+            }
         }
     }
+}
+
+fn full_path(command: &str) -> Option<String> {
+    let paths = env::var("PATH").unwrap_or_default();
+    for path in paths.split(':') {
+        let full_path = format!("{}/{}", path, command);
+        if let Ok(metadata) = std::fs::metadata(&full_path)
+            && metadata.is_file()
+            && metadata.permissions().mode() & 0o111 != 0
+        {
+            return Some(full_path);
+        }
+    }
+    None
 }
