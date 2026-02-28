@@ -5,7 +5,7 @@ use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
 
 fn main() {
-    let builtins = ["echo", "exit", "type"];
+    let builtins = ["echo", "exit", "type", "pwd"];
     loop {
         print!("$ ");
         io::stdout().flush().unwrap();
@@ -19,6 +19,10 @@ fn main() {
         }
         match command[0] {
             "exit" => break,
+            "pwd" => match env::current_dir() {
+                Ok(path) => println!("{}", path.display()),
+                Err(e) => eprintln!("Error getting current directory: {}", e),
+            },
             "type" => {
                 if command.len() < 2 {
                     println!("type: missing argument");
