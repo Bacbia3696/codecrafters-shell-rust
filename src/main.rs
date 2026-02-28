@@ -64,16 +64,13 @@ fn main() {
                 println!("{}", output);
             }
             _ => {
-                let output = std::process::Command::new(command[0])
+                let status = std::process::Command::new(command[0])
                     .args(&command[1..])
-                    .output();
-                match output {
-                    Ok(output) => {
-                        if !output.stdout.is_empty() {
-                            print!("{}", String::from_utf8_lossy(&output.stdout));
-                        }
-                        if !output.stderr.is_empty() {
-                            eprint!("{}", String::from_utf8_lossy(&output.stderr));
+                    .status();
+                match status {
+                    Ok(status) => {
+                        if !status.success() {
+                            eprintln!("{}: exit code {}", command[0], status.code().unwrap_or(-1));
                         }
                     }
                     Err(_) => eprintln!("{}: command not found", command[0]),
