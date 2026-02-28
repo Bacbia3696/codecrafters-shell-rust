@@ -86,7 +86,7 @@ fn tokenize(input: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
     let mut in_single_quote = false;
-    let chars = input.chars().peekable();
+    let chars = input.chars();
 
     for c in chars {
         if c == '\'' && !in_single_quote {
