@@ -1,7 +1,7 @@
 use std::env;
 
 /// List of builtin commands
-pub const BUILTINS: &[&str] = &["echo", "exit", "type", "pwd", "cd"];
+pub const BUILTINS: &[&str] = &["echo", "exit", "type", "pwd", "cd", "clear"];
 
 /// Executes a builtin command and returns the output or error.
 pub fn execute_builtin(cmd: &str, args: &[String]) -> Result<String, String> {
@@ -12,6 +12,7 @@ pub fn execute_builtin(cmd: &str, args: &[String]) -> Result<String, String> {
         "cd" => execute_cd(args),
         "type" => execute_type(args),
         "echo" => Ok(args[1..].join(" ") + "\n"),
+        "clear" => Ok("\x1b[2J\x1b[H".to_string()),
         _ => Err(format!("{}: command not found", cmd)),
     }
 }

@@ -95,6 +95,7 @@ pub fn create_file(file: &str, append: bool) -> Result<(), std::io::Error> {
 /// Handles output redirection for command results.
 pub fn handle_output(result: &Result<String, String>, parsed: &ParsedCommand) {
     use crate::commands::BUILTINS;
+    use std::io::{self, Write};
 
     // Handle stdout redirection
     if let Some(ref redirection) = parsed.redirect_stdout {
@@ -108,6 +109,10 @@ pub fn handle_output(result: &Result<String, String>, parsed: &ParsedCommand) {
         && !output.is_empty()
     {
         print!("{}", output);
+        // Flush stdout for commands like `clear` that need immediate effect
+        if parsed.args.first().is_some_and(|a| a == "clear") {
+            let _ = io::stdout().flush();
+        }
     }
 
     // Handle stderr redirection for builtins

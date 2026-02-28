@@ -1,9 +1,9 @@
+use rustyline::Helper;
 use rustyline::completion::{Completer, FilenameCompleter, Pair};
 use rustyline::error::ReadlineError;
 use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
 use rustyline::validate::Validator;
-use rustyline::Helper;
 use std::env;
 
 /// Shell completer for tab completion.
@@ -31,7 +31,14 @@ impl Completer for ShellCompleter {
         ctx: &rustyline::Context<'_>,
     ) -> Result<(usize, Vec<Self::Candidate>), ReadlineError> {
         let (start, word) = extract_word(line, pos);
-        let is_first_word = line[..pos].split_whitespace().count() <= 1;
+        // Check if we're completing the first word (command)
+        // If cursor is right after whitespace, we're on the second word
+        let is_first_word = pos > 0
+            && line[..pos]
+                .chars()
+                .last()
+                .is_none_or(|c| !c.is_whitespace())
+            && line[..pos].split_whitespace().count() <= 1;
 
         if is_first_word {
             let mut candidates = Vec::new();
@@ -69,13 +76,21 @@ impl Completer for ShellCompleter {
             candidates.dedup_by(|a, b| a.display == b.display);
             Ok((start, candidates))
         } else {
-            // Use filename completer but add trailing space to single completions
+            // Use filename completer: directories get '/', files get ' '
             let (start, candidates) = self.filename_completer.complete(line, pos, ctx)?;
             let candidates_with_space: Vec<Pair> = candidates
                 .into_iter()
-                .map(|c| Pair {
-                    display: c.display,
-                    replacement: c.replacement + " ",
+                .map(|c| {
+                    // rustyline adds '/' for directories, so we only add space for files
+                    let replacement = if c.replacement.ends_with('/') {
+                        c.replacement
+                    } else {
+                        c.replacement + " "
+                    };
+                    Pair {
+                        display: c.display,
+                        replacement,
+                    }
                 })
                 .collect();
             Ok((start, candidates_with_space))
@@ -85,7 +100,9 @@ impl Completer for ShellCompleter {
 
 fn extract_word(line: &str, pos: usize) -> (usize, String) {
     let before = &line[..pos];
-    let start = before.rfind(|c: char| c.is_whitespace()).map_or(0, |i| i + 1);
+    let start = before
+        .rfind(|c: char| c.is_whitespace())
+        .map_or(0, |i| i + 1);
     (start, line[start..pos].to_string())
 }
 

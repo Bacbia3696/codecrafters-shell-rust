@@ -3,23 +3,23 @@ mod completion;
 mod redirection;
 mod tokenize;
 
-use commands::{execute_builtin, BUILTINS};
+use commands::{BUILTINS, execute_builtin};
 use completion::ShellCompleter;
 use redirection::{handle_output, parse_command};
-use rustyline::error::ReadlineError;
-use rustyline::{Config, Editor, Result};
-use rustyline::history::DefaultHistory;
 use rustyline::CompletionType;
+use rustyline::error::ReadlineError;
+use rustyline::history::DefaultHistory;
+use rustyline::{Config, Editor, Result};
 use tokenize::tokenize;
 
 fn main() -> Result<()> {
     let builtins: Vec<String> = BUILTINS.iter().map(|s| s.to_string()).collect();
     let completer = ShellCompleter::new(builtins.clone());
-    
+
     let config = Config::builder()
         .completion_type(CompletionType::List)
         .build();
-    
+
     let mut rl: Editor<ShellCompleter, DefaultHistory> = Editor::with_config(config)?;
     rl.set_helper(Some(completer));
 
