@@ -85,6 +85,38 @@ impl Hinter for ShellCompleter {
 impl Highlighter for ShellCompleter {}
 impl Validator for ShellCompleter {}
 
+struct ParsedCommand {
+    args: Vec<String>,
+    redirect_to: Option<String>,
+}
+
+fn parse_command(tokens: Vec<String>) -> ParsedCommand {
+    let mut args = Vec::new();
+    let mut redirect_to = None;
+    let mut i = 0;
+
+    while i < tokens.len() {
+        let token = &tokens[i];
+
+        // Check for redirection operators: >, 1>, 2>
+        let is_redirect = token == ">" || token == "1>" || token == "2>";
+
+        if is_redirect {
+            if i + 1 < tokens.len() {
+                redirect_to = Some(tokens[i + 1].clone());
+                i += 2;
+            } else {
+                i += 1;
+            }
+        } else {
+            args.push(token.clone());
+            i += 1;
+        }
+    }
+
+    ParsedCommand { args, redirect_to }
+}
+
 fn main() -> rustyline::Result<()> {
     let builtins: Vec<String> = vec![
         "echo".into(),
@@ -106,15 +138,22 @@ fn main() -> rustyline::Result<()> {
             Ok(input) => {
                 rl.add_history_entry(&input)?;
 
-                let command: Vec<_> = tokenize(&input);
+                let tokens: Vec<_> = tokenize(&input);
+                if tokens.is_empty() {
+                    continue;
+                }
+                let parsed = parse_command(tokens);
+                let command = &parsed.args;
+
                 if command.is_empty() {
                     continue;
                 }
-                match command[0].as_str() {
+
+                let result = match command[0].as_str() {
                     "exit" => break,
                     "pwd" => match env::current_dir() {
-                        Ok(path) => println!("{}", path.display()),
-                        Err(e) => eprintln!("Error getting current directory: {}", e),
+                        Ok(path) => Ok(format!("{}\n", path.display())),
+                        Err(e) => Err(format!("Error getting current directory: {}", e)),
                     },
                     "cd" => {
                         let target = command.get(1).map_or_else(
@@ -131,34 +170,61 @@ fn main() -> rustyline::Result<()> {
                         );
                         if let Some(dir) = target {
                             if env::set_current_dir(&dir).is_err() {
-                                eprintln!("cd: {}: No such file or directory", dir);
+                                Err(format!("cd: {}: No such file or directory", dir))
+                            } else {
+                                Ok(String::new())
                             }
                         } else {
-                            eprintln!("cd: HOME not set");
+                            Err("cd: HOME not set".to_string())
                         }
                     }
                     "type" => {
                         if command.len() < 2 {
-                            println!("type: missing argument");
+                            Ok("type: missing argument\n".to_string())
                         } else if builtins.contains(&command[1]) {
-                            println!("{} is a shell builtin", command[1]);
+                            Ok(format!("{} is a shell builtin\n", command[1]))
                         } else {
                             match full_path(&command[1]) {
-                                Some(path) => println!("{} is {}", command[1], path),
-                                None => println!("{}: not found", command[1]),
+                                Some(path) => Ok(format!("{} is {}\n", command[1], path)),
+                                None => Ok(format!("{}: not found\n", command[1])),
                             }
                         }
                     }
-                    "echo" => {
-                        let output = command[1..].join(" ");
-                        println!("{}", output);
-                    }
+                    "echo" => Ok(command[1..].join(" ") + "\n"),
                     _ => {
-                        let mut cmd = std::process::Command::new(command[0].clone());
+                        let mut cmd = std::process::Command::new(&command[0]);
                         cmd.args(&command[1..]);
-                        if cmd.status().is_err() {
-                            eprintln!("{}: command not found", command[0]);
+                        match cmd.output() {
+                            Ok(output) => {
+                                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                                if !stderr.is_empty() {
+                                    eprint!("{}", stderr);
+                                }
+                                Ok(stdout)
+                            }
+                            Err(_) => Err(format!("{}: command not found", command[0])),
                         }
+                    }
+                };
+
+                // Handle output
+                if let Ok(output) = result {
+                    if !output.is_empty() {
+                        if let Some(ref file) = parsed.redirect_to {
+                            if let Err(e) = std::fs::write(file, &output) {
+                                eprintln!("{}: {}", file, e);
+                            }
+                        } else {
+                            print!("{}", output);
+                        }
+                    }
+                } else if let Err(e) = result {
+                    if let Some(ref _file) = parsed.redirect_to {
+                        // Redirect stderr to file too? For now, just print to stderr
+                        eprintln!("{}", e);
+                    } else {
+                        eprintln!("{}", e);
                     }
                 }
             }
@@ -191,6 +257,19 @@ fn tokenize(input: &str) -> Vec<String> {
             in_single_quote = !in_single_quote;
         } else if c == '"' && !in_single_quote {
             in_double_quote = !in_double_quote;
+        } else if c == '>' && !in_single_quote && !in_double_quote {
+            // Handle redirection: check if current ends with a digit (e.g., "1>")
+            if !current.is_empty() && current.chars().last().unwrap().is_ascii_digit() {
+                current.push(c);
+                tokens.push(current.clone());
+                current.clear();
+            } else {
+                if !current.is_empty() {
+                    tokens.push(current.clone());
+                    current.clear();
+                }
+                tokens.push(c.to_string());
+            }
         } else if c.is_whitespace() && !in_single_quote && !in_double_quote {
             if !current.is_empty() {
                 tokens.push(current.clone());
