@@ -37,29 +37,30 @@ impl Completer for ShellCompleter {
             let mut candidates = Vec::new();
 
             // Complete builtins
-            for builtin in &self.builtins {
-                if builtin.starts_with(&word) {
+            self.builtins
+                .iter()
+                .filter(|b| b.starts_with(&word))
+                .for_each(|builtin| {
                     candidates.push(Pair {
                         display: builtin.clone(),
                         replacement: format!("{} ", builtin),
                     });
-                }
-            }
+                });
 
             // Complete PATH binaries
             if let Ok(path) = env::var("PATH") {
                 for dir in path.split(':') {
                     if let Ok(entries) = std::fs::read_dir(dir) {
-                        for entry in entries.flatten() {
-                            if let Ok(name) = entry.file_name().into_string()
-                                && name.starts_with(&word)
-                            {
+                        entries
+                            .flatten()
+                            .filter_map(|e| e.file_name().into_string().ok())
+                            .filter(|name| name.starts_with(&word))
+                            .for_each(|name| {
                                 candidates.push(Pair {
                                     display: name.clone(),
                                     replacement: format!("{} ", name),
                                 });
-                            }
-                        }
+                            });
                     }
                 }
             }
@@ -75,9 +76,7 @@ impl Completer for ShellCompleter {
 
 fn extract_word(line: &str, pos: usize) -> (usize, String) {
     let before = &line[..pos];
-    let start = before
-        .rfind(|c: char| c.is_whitespace())
-        .map_or(0, |i| i + 1);
+    let start = before.rfind(|c: char| c.is_whitespace()).map_or(0, |i| i + 1);
     (start, line[start..pos].to_string())
 }
 
