@@ -26,6 +26,17 @@ fn main() -> Result<()> {
     let _ = rl.history_mut().ignore_dups(false);
     let _ = rl.history_mut().clear();
 
+    // Load history from HISTFILE on startup
+    if let Ok(histfile) = std::env::var("HISTFILE") {
+        if let Ok(content) = std::fs::read_to_string(&histfile) {
+            for line in content.lines() {
+                if !line.is_empty() {
+                    let _ = rl.add_history_entry(line);
+                }
+            }
+        }
+    }
+
     // Track the last written history index for history -a
     let mut last_written_index: usize = 0;
 
@@ -111,6 +122,13 @@ fn main() -> Result<()> {
                 break;
             }
         }
+    }
+
+    // Save history to HISTFILE on exit
+    if let Ok(histfile) = std::env::var("HISTFILE") {
+        let mut content: String = rl.history().iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n");
+        content.push('\n');
+        let _ = std::fs::write(histfile, content);
     }
 
     Ok(())
