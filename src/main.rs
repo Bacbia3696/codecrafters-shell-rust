@@ -42,10 +42,15 @@ fn main() -> Result<()> {
 
                 let parsed = &commands[0];
                 if commands.len() == 1 && !parsed.args.is_empty() {
-                    if BUILTINS.contains(&parsed.args[0].as_str()) {
-                        let result = execute_builtin(&parsed.args[0], &parsed.args);
+                    let cmd = &parsed.args[0];
+                    if cmd == "history" {
+                        for (i, entry) in rl.history().iter().enumerate() {
+                            println!("{:>4}  {}", i + 1, entry);
+                        }
+                    } else if BUILTINS.contains(&cmd.as_str()) {
+                        let result = execute_builtin(cmd, &parsed.args);
                         handle_output(&result, parsed);
-                    } else if let Err(e) = execute_external(&parsed.args[0], &parsed.args, parsed) {
+                    } else if let Err(e) = execute_external(cmd, &parsed.args, parsed) {
                         eprintln!("{}", e);
                     }
                 } else if let Err(e) = execute_pipeline(&commands) {
@@ -94,11 +99,14 @@ fn execute_external(
 }
 
 fn open_file(path: &str, append: bool) -> std::result::Result<std::fs::File, std::io::Error> {
-    std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(!append)
-        .open(path)
+    if append {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+    } else {
+        std::fs::File::create(path)
+    }
 }
 
 /// Executes a pipeline of commands, connecting stdout of each to stdin of the next.
