@@ -181,8 +181,8 @@ fn tokenize(input: &str) -> Vec<String> {
     let mut chars = input.chars().peekable();
 
     while let Some(c) = chars.next() {
-        // Handle backslash escape outside quotes
-        if c == '\\' && !in_single_quote && !in_double_quote {
+        // Handle backslash escape outside quotes and inside double quotes
+        if c == '\\' && !in_single_quote {
             if let Some(&next) = chars.peek() {
                 chars.next(); // consume the escaped character
                 current.push(next);
