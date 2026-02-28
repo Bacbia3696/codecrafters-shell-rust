@@ -31,43 +31,25 @@ fn main() -> Result<()> {
                 rl.add_history_entry(&input)?;
 
                 let tokens = tokenize(&input);
-                if tokens.is_empty() {
-                    continue;
-                }
-
                 let commands = parse_pipeline(tokens);
                 if commands.is_empty() {
                     continue;
                 }
 
-                // Check for exit command
                 if commands.len() == 1 && commands[0].args.first().is_some_and(|a| a == "exit") {
                     break;
                 }
 
-                if commands.len() == 1 {
-                    // Single command - handle builtins and redirections
-                    let parsed = &commands[0];
-                    let command = &parsed.args;
-
-                    if command.is_empty() {
-                        continue;
-                    }
-
-                    if BUILTINS.contains(&command[0].as_str()) {
-                        let result = execute_builtin(&command[0], command);
+                let parsed = &commands[0];
+                if commands.len() == 1 && !parsed.args.is_empty() {
+                    if BUILTINS.contains(&parsed.args[0].as_str()) {
+                        let result = execute_builtin(&parsed.args[0], &parsed.args);
                         handle_output(&result, parsed);
-                    } else {
-                        // External commands stream output directly (no buffering)
-                        if let Err(e) = execute_external(&command[0], command, parsed) {
-                            eprintln!("{}", e);
-                        }
-                    }
-                } else {
-                    // Pipeline - execute multiple commands with pipes (output is inherited)
-                    if let Err(e) = execute_pipeline(&commands) {
+                    } else if let Err(e) = execute_external(&parsed.args[0], &parsed.args, parsed) {
                         eprintln!("{}", e);
                     }
+                } else if let Err(e) = execute_pipeline(&commands) {
+                    eprintln!("{}", e);
                 }
             }
             Err(ReadlineError::Interrupted | ReadlineError::Eof) => break,
@@ -112,14 +94,11 @@ fn execute_external(
 }
 
 fn open_file(path: &str, append: bool) -> std::result::Result<std::fs::File, std::io::Error> {
-    if append {
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-    } else {
-        std::fs::File::create(path)
-    }
+    std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(!append)
+        .open(path)
 }
 
 /// Executes a pipeline of commands, connecting stdout of each to stdin of the next.
@@ -139,16 +118,12 @@ fn execute_pipeline(commands: &[redirection::ParsedCommand]) -> std::result::Res
         let cmd = &parsed.args[0];
 
         if BUILTINS.contains(&cmd.as_str()) {
-            // Wait for all previous children to complete
             for child in &mut children {
                 let _ = child.wait();
             }
             children.clear();
-
-            // Consume previous stdout (builtins don't read stdin)
             drop(prev_stdout.take());
 
-            // Execute builtin
             let output = execute_builtin(cmd, &parsed.args);
 
             if is_last {
@@ -159,37 +134,30 @@ fn execute_pipeline(commands: &[redirection::ParsedCommand]) -> std::result::Res
                 } else if let Ok(content) = &output {
                     print!("{}", content);
                 }
-            } else {
-                // For builtin -> external, buffer output and feed via cat
-                if let Ok(content) = &output {
-                    let data = content.as_bytes().to_vec();
-                    let mut feeder = Command::new("cat")
-                        .stdin(Stdio::piped())
-                        .stdout(Stdio::piped())
-                        .spawn()
-                        .map_err(|_| "Failed to spawn cat".to_string())?;
+            } else if let Ok(content) = &output {
+                let mut feeder = Command::new("cat")
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .spawn()
+                    .map_err(|_| "Failed to spawn cat".to_string())?;
 
-                    if let Some(mut stdin) = feeder.stdin.take() {
-                        let _ = stdin.write_all(&data);
-                    }
-
-                    prev_stdout = feeder.stdout.take();
-                    children.push(feeder);
+                if let Some(mut stdin) = feeder.stdin.take() {
+                    let _ = stdin.write_all(&content.as_bytes());
                 }
+
+                prev_stdout = feeder.stdout.take();
+                children.push(feeder);
             }
         } else {
-            // External command
             let mut command = Command::new(cmd);
             command.args(&parsed.args[1..]);
 
-            // Set up stdin from previous command
             if let Some(stdout) = prev_stdout.take() {
                 command.stdin(Stdio::from(stdout));
             } else if i > 0 {
                 command.stdin(Stdio::inherit());
             }
 
-            // Set up stdout
             if is_last {
                 if let Some(ref r) = last.redirect_stdout {
                     if let Ok(file) = open_file(&r.file, r.append) {
@@ -213,10 +181,8 @@ fn execute_pipeline(commands: &[redirection::ParsedCommand]) -> std::result::Res
         }
     }
 
-    // Stream output from last command if not redirected
-    if let Some(last_parsed) = commands.last()
-        && last_parsed.redirect_stdout.is_none()
-        && let Some(last_child) = children.last_mut()
+    if let Some(last_child) = children.last_mut()
+        && last.redirect_stdout.is_none()
         && let Some(mut stdout) = last_child.stdout.take()
     {
         let mut buf = [0u8; 1024];
@@ -229,7 +195,6 @@ fn execute_pipeline(commands: &[redirection::ParsedCommand]) -> std::result::Res
         }
     }
 
-    // Wait for remaining children
     for child in &mut children {
         let _ = child.wait();
     }
