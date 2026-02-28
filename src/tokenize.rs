@@ -1,5 +1,5 @@
 /// Tokenizes shell input into a vector of strings.
-/// Handles quotes, escapes, and redirection operators.
+/// Handles quotes, escapes, redirection operators, and pipelines.
 pub fn tokenize(input: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
@@ -41,6 +41,13 @@ pub fn tokenize(input: &str) -> Vec<String> {
             }
 
             tokens.push(redirect_token);
+        } else if c == '|' && !in_single_quote && !in_double_quote {
+            // Handle pipeline operator
+            if !current.is_empty() {
+                tokens.push(current.clone());
+                current.clear();
+            }
+            tokens.push("|".to_string());
         } else if c.is_whitespace() && !in_single_quote && !in_double_quote {
             if !current.is_empty() {
                 tokens.push(current.clone());

@@ -52,6 +52,10 @@ pub fn parse_command(tokens: Vec<String>) -> ParsedCommand {
                 });
                 i += 2;
             }
+            "|" => {
+                // Pipeline operator - stop parsing this command
+                break;
+            }
             _ => {
                 args.push(tokens[i].clone());
                 i += 1;
@@ -64,6 +68,30 @@ pub fn parse_command(tokens: Vec<String>) -> ParsedCommand {
         redirect_stdout,
         redirect_stderr,
     }
+}
+
+/// Parses tokens into a list of commands separated by |
+pub fn parse_pipeline(tokens: Vec<String>) -> Vec<ParsedCommand> {
+    let mut commands = Vec::new();
+    let mut current_tokens = Vec::new();
+
+    for token in tokens {
+        if token == "|" {
+            if !current_tokens.is_empty() {
+                commands.push(parse_command(current_tokens));
+                current_tokens = Vec::new();
+            }
+        } else {
+            current_tokens.push(token);
+        }
+    }
+
+    // Don't forget the last command
+    if !current_tokens.is_empty() {
+        commands.push(parse_command(current_tokens));
+    }
+
+    commands
 }
 
 /// Writes content to a file, with optional append mode.
@@ -136,7 +164,12 @@ mod tests {
 
     #[test]
     fn test_parse_stdout_redirect() {
-        let tokens = vec!["echo".to_string(), "hi".to_string(), ">".to_string(), "out.txt".to_string()];
+        let tokens = vec![
+            "echo".to_string(),
+            "hi".to_string(),
+            ">".to_string(),
+            "out.txt".to_string(),
+        ];
         let parsed = parse_command(tokens);
         assert_eq!(parsed.args, vec!["echo", "hi"]);
         assert!(parsed.redirect_stdout.is_some());
