@@ -81,16 +81,20 @@ impl Completer for ShellCompleter {
             let candidates_with_space: Vec<Pair> = candidates
                 .into_iter()
                 .map(|c| {
-                    // rustyline adds '/' for directories, so we only add space for files
-                    let replacement = if c.replacement.ends_with('/') {
+                    // rustyline adds '/' to replacement for directories
+                    let is_dir = c.replacement.ends_with('/');
+                    let replacement = if is_dir {
                         c.replacement
                     } else {
                         c.replacement + " "
                     };
-                    Pair {
-                        display: c.display,
-                        replacement,
-                    }
+                    // Display shows '/' for directories, no suffix for files
+                    let display = if is_dir {
+                        c.display + "/"
+                    } else {
+                        c.display
+                    };
+                    Pair { display, replacement }
                 })
                 .collect();
             Ok((start, candidates_with_space))
