@@ -69,7 +69,16 @@ impl Completer for ShellCompleter {
             candidates.dedup_by(|a, b| a.display == b.display);
             Ok((start, candidates))
         } else {
-            self.filename_completer.complete(line, pos, ctx)
+            // Use filename completer but add trailing space to single completions
+            let (start, candidates) = self.filename_completer.complete(line, pos, ctx)?;
+            let candidates_with_space: Vec<Pair> = candidates
+                .into_iter()
+                .map(|c| Pair {
+                    display: c.display,
+                    replacement: c.replacement + " ",
+                })
+                .collect();
+            Ok((start, candidates_with_space))
         }
     }
 }
