@@ -1,5 +1,8 @@
+use std::env;
 #[allow(unused_imports)]
 use std::io::{self, Write};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 fn main() {
     let builtins = ["echo", "exit", "type"];
@@ -22,7 +25,22 @@ fn main() {
                 } else if builtins.contains(&command[1]) {
                     println!("{} is a shell builtin", command[1]);
                 } else {
-                    println!("{}: not found", command[1]);
+                    let paths = env::var("PATH").unwrap_or_default();
+                    let mut found = false;
+                    for path in paths.split(':') {
+                        let full_path = format!("{}/{}", path, command[1]);
+                        if let Ok(metadata) = std::fs::metadata(&full_path)
+                            && metadata.is_file()
+                            && metadata.permissions().mode() & 0o111 != 0
+                        {
+                            println!("{} is {}", command[1], full_path);
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found {
+                        println!("{}: not found", command[1]);
+                    }
                 }
             }
             "echo" => {
