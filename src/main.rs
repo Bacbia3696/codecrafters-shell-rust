@@ -45,17 +45,24 @@ fn main() -> Result<()> {
                 if commands.len() == 1 && !parsed.args.is_empty() {
                     let cmd = &parsed.args[0];
                     if cmd == "history" {
-                        let limit = parsed.args.get(1).and_then(|n| n.parse::<usize>().ok());
-                        let entries: Vec<&str> = rl.history().iter().map(|s| s.as_str()).collect();
-                        
-                        let start_idx = if let Some(n) = limit {
-                            entries.len().saturating_sub(n)
+                        // Check for -r flag to read history from file
+                        if let Some(flag) = parsed.args.get(1) {
+                            if flag == "-r" {
+                                if let Some(path) = parsed.args.get(2) {
+                                    if let Ok(content) = std::fs::read_to_string(path) {
+                                        for line in content.lines() {
+                                            if !line.is_empty() {
+                                                let _ = rl.add_history_entry(line);
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                // Not -r flag, so display history
+                                display_history(&rl, parsed.args.get(1));
+                            }
                         } else {
-                            0
-                        };
-                        
-                        for (i, entry) in entries.iter().enumerate().skip(start_idx) {
-                            println!("{:>4}  {}", i + 1, entry);
+                            display_history(&rl, None);
                         }
                     } else if BUILTINS.contains(&cmd.as_str()) {
                         let result = execute_builtin(cmd, &parsed.args);
@@ -76,6 +83,21 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn display_history(rl: &Editor<ShellCompleter, DefaultHistory>, limit_arg: Option<&String>) {
+    let limit = limit_arg.and_then(|n| n.parse::<usize>().ok());
+    let entries: Vec<&str> = rl.history().iter().map(|s| s.as_str()).collect();
+
+    let start_idx = if let Some(n) = limit {
+        entries.len().saturating_sub(n)
+    } else {
+        0
+    };
+
+    for (i, entry) in entries.iter().enumerate().skip(start_idx) {
+        println!("{:>4}  {}", i + 1, entry);
+    }
 }
 
 fn execute_external(
@@ -160,7 +182,7 @@ fn execute_pipeline(commands: &[redirection::ParsedCommand]) -> std::result::Res
                     .map_err(|_| "Failed to spawn cat".to_string())?;
 
                 if let Some(mut stdin) = feeder.stdin.take() {
-                    let _ = stdin.write_all(&content.as_bytes());
+                    let _ = stdin.write_all(content.as_bytes());
                 }
 
                 prev_stdout = feeder.stdout.take();
