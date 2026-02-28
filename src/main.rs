@@ -26,18 +26,7 @@ fn main() -> Result<()> {
     let _ = rl.history_mut().ignore_dups(false);
     let _ = rl.history_mut().clear();
 
-    // Load history from HISTFILE on startup
-    if let Ok(histfile) = std::env::var("HISTFILE") {
-        if let Ok(content) = std::fs::read_to_string(&histfile) {
-            for line in content.lines() {
-                if !line.is_empty() {
-                    let _ = rl.add_history_entry(line);
-                }
-            }
-        }
-    }
-
-    // Track the last written history index for history -a
+    load_history(&mut rl);
     let mut last_written_index: usize = 0;
 
     loop {
@@ -46,8 +35,7 @@ fn main() -> Result<()> {
             Ok(input) => {
                 rl.add_history_entry(&input)?;
 
-                let tokens = tokenize(&input);
-                let commands = parse_pipeline(tokens);
+                let commands = parse_pipeline(tokenize(&input));
                 if commands.is_empty() {
                     continue;
                 }
@@ -58,59 +46,17 @@ fn main() -> Result<()> {
 
                 let parsed = &commands[0];
                 if commands.len() == 1 && !parsed.args.is_empty() {
-                    let cmd = &parsed.args[0];
-                    if cmd == "history" {
-                        // Check for -r flag to read history from file
-                        if let Some(flag) = parsed.args.get(1) {
-                            if flag == "-r" {
-                                if let Some(path) = parsed.args.get(2) {
-                                    if let Ok(content) = std::fs::read_to_string(path) {
-                                        for line in content.lines() {
-                                            if !line.is_empty() {
-                                                let _ = rl.add_history_entry(line);
-                                            }
-                                        }
-                                    }
-                                }
-                            } else if flag == "-w" {
-                                // Write all history to file
-                                if let Some(path) = parsed.args.get(2) {
-                                    let mut content: String = rl.history().iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n");
-                                    content.push('\n');
-                                    let _ = std::fs::write(path, content);
-                                    last_written_index = rl.history().len();
-                                }
-                            } else if flag == "-a" {
-                                // Append only new history entries to file
-                                if let Some(path) = parsed.args.get(2) {
-                                    let current_len = rl.history().len();
-                                    if current_len > last_written_index {
-                                        let new_entries: Vec<&str> = rl.history().iter()
-                                            .skip(last_written_index)
-                                            .map(|s| s.as_str())
-                                            .collect();
-                                        let mut content = new_entries.join("\n");
-                                        if !content.is_empty() {
-                                            content.push('\n');
-                                            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-                                                let _ = std::io::Write::write_all(&mut file, content.as_bytes());
-                                            }
-                                        }
-                                    }
-                                    last_written_index = rl.history().len();
-                                }
-                            } else {
-                                // Not -r or -w flag, so display history
-                                display_history(&rl, parsed.args.get(1));
-                            }
-                        } else {
-                            display_history(&rl, None);
+                    match parsed.args[0].as_str() {
+                        "history" => handle_history(&mut rl, &parsed.args, &mut last_written_index),
+                        cmd if BUILTINS.contains(&cmd) => {
+                            let result = execute_builtin(cmd, &parsed.args);
+                            handle_output(&result, parsed);
                         }
-                    } else if BUILTINS.contains(&cmd.as_str()) {
-                        let result = execute_builtin(cmd, &parsed.args);
-                        handle_output(&result, parsed);
-                    } else if let Err(e) = execute_external(cmd, &parsed.args, parsed) {
-                        eprintln!("{}", e);
+                        cmd => {
+                            if let Err(e) = execute_external(cmd, &parsed.args, parsed) {
+                                eprintln!("{}", e);
+                            }
+                        }
                     }
                 } else if let Err(e) = execute_pipeline(&commands) {
                     eprintln!("{}", e);
@@ -124,27 +70,98 @@ fn main() -> Result<()> {
         }
     }
 
-    // Save history to HISTFILE on exit
-    if let Ok(histfile) = std::env::var("HISTFILE") {
-        let mut content: String = rl.history().iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n");
-        content.push('\n');
-        let _ = std::fs::write(histfile, content);
-    }
-
+    save_history(&rl);
     Ok(())
 }
 
-fn display_history(rl: &Editor<ShellCompleter, DefaultHistory>, limit_arg: Option<&String>) {
-    let limit = limit_arg.and_then(|n| n.parse::<usize>().ok());
+fn load_history(rl: &mut Editor<ShellCompleter, DefaultHistory>) {
+    if let Ok(histfile) = std::env::var("HISTFILE")
+        && let Ok(content) = std::fs::read_to_string(&histfile)
+    {
+        for line in content.lines() {
+            if !line.is_empty() {
+                let _ = rl.add_history_entry(line);
+            }
+        }
+    }
+}
+
+fn save_history(rl: &Editor<ShellCompleter, DefaultHistory>) {
+    if let Ok(histfile) = std::env::var("HISTFILE") {
+        let content = rl
+            .history()
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        let _ = std::fs::write(histfile, content);
+    }
+}
+
+fn handle_history(
+    rl: &mut Editor<ShellCompleter, DefaultHistory>,
+    args: &[String],
+    last_written_index: &mut usize,
+) {
+    match args.get(1).map(|s| s.as_str()) {
+        Some("-r") => {
+            if let Some(path) = args.get(2)
+                && let Ok(content) = std::fs::read_to_string(path)
+            {
+                for line in content.lines() {
+                    if !line.is_empty() {
+                        let _ = rl.add_history_entry(line);
+                    }
+                }
+            }
+        }
+        Some("-w") => {
+            if let Some(path) = args.get(2) {
+                let content = rl
+                    .history()
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+                    + "\n";
+                let _ = std::fs::write(path, content);
+                *last_written_index = rl.history().len();
+            }
+        }
+        Some("-a") => {
+            if let Some(path) = args.get(2) {
+                let current_len = rl.history().len();
+                if current_len > *last_written_index {
+                    let content: String = rl
+                        .history()
+                        .iter()
+                        .skip(*last_written_index)
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                        + "\n";
+                    if let Ok(mut file) = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path)
+                    {
+                        let _ = std::io::Write::write_all(&mut file, content.as_bytes());
+                    }
+                }
+                *last_written_index = current_len;
+            }
+        }
+        Some(n) => display_history(rl, n.parse::<usize>().ok()),
+        None => display_history(rl, None),
+    }
+}
+
+fn display_history(rl: &Editor<ShellCompleter, DefaultHistory>, limit: Option<usize>) {
     let entries: Vec<&str> = rl.history().iter().map(|s| s.as_str()).collect();
+    let start = limit.map_or(0, |n| entries.len().saturating_sub(n));
 
-    let start_idx = if let Some(n) = limit {
-        entries.len().saturating_sub(n)
-    } else {
-        0
-    };
-
-    for (i, entry) in entries.iter().enumerate().skip(start_idx) {
+    for (i, entry) in entries.iter().enumerate().skip(start) {
         println!("{:>4}  {}", i + 1, entry);
     }
 }
@@ -190,7 +207,6 @@ fn open_file(path: &str, append: bool) -> std::result::Result<std::fs::File, std
     }
 }
 
-/// Executes a pipeline of commands, connecting stdout of each to stdin of the next.
 fn execute_pipeline(commands: &[redirection::ParsedCommand]) -> std::result::Result<(), String> {
     use std::io::{Read, Write};
 
@@ -233,7 +249,6 @@ fn execute_pipeline(commands: &[redirection::ParsedCommand]) -> std::result::Res
                 if let Some(mut stdin) = feeder.stdin.take() {
                     let _ = stdin.write_all(content.as_bytes());
                 }
-
                 prev_stdout = feeder.stdout.take();
                 children.push(feeder);
             }
@@ -247,13 +262,9 @@ fn execute_pipeline(commands: &[redirection::ParsedCommand]) -> std::result::Res
                 command.stdin(Stdio::inherit());
             }
 
-            if is_last {
-                if let Some(ref r) = last.redirect_stdout {
-                    if let Ok(file) = open_file(&r.file, r.append) {
-                        command.stdout(file);
-                    }
-                } else {
-                    command.stdout(Stdio::piped());
+            if is_last && let Some(ref r) = last.redirect_stdout {
+                if let Ok(file) = open_file(&r.file, r.append) {
+                    command.stdout(file);
                 }
             } else {
                 command.stdout(Stdio::piped());
