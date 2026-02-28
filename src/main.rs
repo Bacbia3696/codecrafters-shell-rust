@@ -271,44 +271,65 @@ fn main() -> rustyline::Result<()> {
                     }
                 }
 
-                // Handle output
-                if let Ok(output) = result {
-                    if !output.is_empty() {
-                        if let Some(ref redirection) = parsed.redirect_stdout {
-                            let result = if redirection.append {
-                                std::fs::OpenOptions::new()
-                                    .create(true)
-                                    .append(true)
-                                    .open(&redirection.file)
-                                    .and_then(|mut f| {
-                                        std::io::Write::write_all(&mut f, output.as_bytes())
-                                    })
-                            } else {
-                                std::fs::write(&redirection.file, &output)
-                            };
-                            if let Err(e) = result {
-                                eprintln!("{}: {}", redirection.file, e);
-                            }
-                        } else {
-                            print!("{}", output);
-                        }
-                    }
-                } else if let Err(e) = result {
-                    if let Some(ref redirection) = parsed.redirect_stderr {
-                        let result = if redirection.append {
+                // Handle stdout redirection (create file even if no output)
+                if let Some(ref redirection) = parsed.redirect_stdout {
+                    if let Ok(output) = &result {
+                        let write_result = if redirection.append {
                             std::fs::OpenOptions::new()
                                 .create(true)
                                 .append(true)
                                 .open(&redirection.file)
-                                .and_then(|mut f| std::io::Write::write_all(&mut f, e.as_bytes()))
+                                .and_then(|mut f| {
+                                    std::io::Write::write_all(&mut f, output.as_bytes())
+                                })
                         } else {
-                            std::fs::write(&redirection.file, &e)
+                            std::fs::write(&redirection.file, output)
                         };
-                        if let Err(err) = result {
-                            eprintln!("{}: {}", redirection.file, err);
+                        if let Err(e) = write_result {
+                            eprintln!("{}: {}", redirection.file, e);
                         }
                     } else {
-                        eprintln!("{}", e);
+                        // Error case - still create the file for stdout redirection
+                        let file_result = if redirection.append {
+                            std::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(&redirection.file)
+                        } else {
+                            std::fs::File::create(&redirection.file)
+                        };
+                        if let Err(e) = file_result {
+                            eprintln!("{}: {}", redirection.file, e);
+                        }
+                    }
+                }
+
+                // Print output if no redirection
+                if let Ok(output) = &result {
+                    if !output.is_empty() && parsed.redirect_stdout.is_none() {
+                        print!("{}", output);
+                    }
+                } else if let Err(e) = &result
+                    && parsed.redirect_stderr.is_none()
+                {
+                    eprintln!("{}", e);
+                }
+
+                // Handle stderr redirection for errors
+                if let Err(e) = &result
+                    && let Some(ref redirection) = parsed.redirect_stderr
+                {
+                    let write_result = if redirection.append {
+                        std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&redirection.file)
+                            .and_then(|mut f| std::io::Write::write_all(&mut f, e.as_bytes()))
+                    } else {
+                        std::fs::write(&redirection.file, e)
+                    };
+                    if let Err(err) = write_result {
+                        eprintln!("{}: {}", redirection.file, err);
                     }
                 }
             }
