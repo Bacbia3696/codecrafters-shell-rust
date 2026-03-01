@@ -41,24 +41,12 @@ fn main() -> Result<()> {
                     continue;
                 }
 
-                if commands.len() == 1 && commands[0].args.first().is_some_and(|a| a == "exit") {
+                if should_exit(&commands) {
                     break;
                 }
 
-                let parsed = &commands[0];
-                if commands.len() == 1 && !parsed.args.is_empty() {
-                    match parsed.args[0].as_str() {
-                        "history" => handle_history(&mut rl, &parsed.args, &mut last_written_index),
-                        cmd if BUILTINS.contains(&cmd) => {
-                            let result = execute_builtin(cmd, &parsed.args);
-                            handle_output(&result, parsed);
-                        }
-                        cmd => {
-                            if let Err(e) = execute_external(cmd, &parsed.args, parsed) {
-                                eprintln!("{}", e);
-                            }
-                        }
-                    }
+                if commands.len() == 1 {
+                    execute_single_command(&mut rl, &commands[0], &mut last_written_index);
                 } else if let Err(e) = execute_pipeline(&commands) {
                     eprintln!("{}", e);
                 }
@@ -75,6 +63,33 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+fn should_exit(commands: &[redirection::ParsedCommand]) -> bool {
+    commands.len() == 1 && commands[0].args.first().is_some_and(|a| a == "exit")
+}
+
+fn execute_single_command(
+    rl: &mut Editor<ShellCompleter, DefaultHistory>,
+    parsed: &redirection::ParsedCommand,
+    last_written_index: &mut usize,
+) {
+    if parsed.args.is_empty() {
+        return;
+    }
+
+    match parsed.args[0].as_str() {
+        "history" => handle_history(rl, &parsed.args, last_written_index),
+        cmd if BUILTINS.contains(&cmd) => {
+            let result = execute_builtin(cmd, &parsed.args);
+            handle_output(&result, parsed);
+        }
+        cmd => {
+            if let Err(e) = execute_external(cmd, &parsed.args, parsed) {
+                eprintln!("{}", e);
+            }
+        }
+    }
+}
+
 fn load_history(rl: &mut Editor<ShellCompleter, DefaultHistory>) {
     if let Ok(histfile) = std::env::var("HISTFILE")
         && let Ok(content) = std::fs::read_to_string(&histfile)
@@ -89,13 +104,7 @@ fn load_history(rl: &mut Editor<ShellCompleter, DefaultHistory>) {
 
 fn save_history(rl: &Editor<ShellCompleter, DefaultHistory>) {
     if let Ok(histfile) = std::env::var("HISTFILE") {
-        let content = rl
-            .history()
-            .iter()
-            .map(|s| s.as_str())
-            .collect::<Vec<_>>()
-            .join("\n")
-            + "\n";
+        let content = history_content(rl);
         let _ = std::fs::write(histfile, content);
     }
 }
@@ -119,13 +128,7 @@ fn handle_history(
         }
         Some("-w") => {
             if let Some(path) = args.get(2) {
-                let content = rl
-                    .history()
-                    .iter()
-                    .map(|s| s.as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n")
-                    + "\n";
+                let content = history_content(rl);
                 let _ = std::fs::write(path, content);
                 *last_written_index = rl.history().len();
             }
@@ -158,6 +161,15 @@ fn handle_history(
     }
 }
 
+fn history_content(rl: &Editor<ShellCompleter, DefaultHistory>) -> String {
+    rl.history()
+        .iter()
+        .map(|s| s.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n"
+}
+
 fn display_history(rl: &Editor<ShellCompleter, DefaultHistory>, limit: Option<usize>) {
     let entries: Vec<&str> = rl.history().iter().map(|s| s.as_str()).collect();
     let start = limit.map_or(0, |n| entries.len().saturating_sub(n));
@@ -185,10 +197,6 @@ fn execute_external(
         && let Ok(file) = open_file(&r.file, r.append)
     {
         command.stdout(file);
-        return match command.status() {
-            Ok(_) => Ok(String::new()),
-            Err(_) => Err(format!("{}: command not found", cmd)),
-        };
     }
 
     match command.status() {
