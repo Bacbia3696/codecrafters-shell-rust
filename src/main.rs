@@ -217,8 +217,6 @@ fn open_file(path: &str, append: bool) -> std::result::Result<std::fs::File, std
 }
 
 fn execute_pipeline(commands: &[redirection::ParsedCommand]) -> std::result::Result<(), String> {
-    use std::io::{Read, Write};
-
     if commands.is_empty() {
         return Ok(());
     }
@@ -232,56 +230,17 @@ fn execute_pipeline(commands: &[redirection::ParsedCommand]) -> std::result::Res
         let cmd = &parsed.args[0];
 
         if BUILTINS.contains(&cmd.as_str()) {
-            for child in &mut children {
-                let _ = child.wait();
-            }
-            children.clear();
-            drop(prev_stdout.take());
+            flush_pipeline_processes(&mut children, &mut prev_stdout);
 
             let output = execute_builtin(cmd, &parsed.args);
-
             if is_last {
-                if let Some(ref r) = last.redirect_stdout {
-                    if let Ok(content) = &output {
-                        let _ = redirection::write_to_file(&r.file, content, r.append);
-                    }
-                } else if let Ok(content) = &output {
-                    print!("{}", content);
-                }
-            } else if let Ok(content) = &output {
-                let mut feeder = Command::new("cat")
-                    .stdin(Stdio::piped())
-                    .stdout(Stdio::piped())
-                    .spawn()
-                    .map_err(|_| "Failed to spawn cat".to_string())?;
-
-                if let Some(mut stdin) = feeder.stdin.take() {
-                    let _ = stdin.write_all(content.as_bytes());
-                }
-                prev_stdout = feeder.stdout.take();
-                children.push(feeder);
+                write_builtin_pipeline_output(&output, last);
+            } else {
+                prev_stdout = spawn_builtin_feeder(&output, &mut children)?;
             }
         } else {
-            let mut command = Command::new(cmd);
-            command.args(&parsed.args[1..]);
-
-            if let Some(stdout) = prev_stdout.take() {
-                command.stdin(Stdio::from(stdout));
-            } else if i > 0 {
-                command.stdin(Stdio::inherit());
-            }
-
-            if is_last && let Some(ref r) = last.redirect_stdout {
-                if let Ok(file) = open_file(&r.file, r.append) {
-                    command.stdout(file);
-                }
-            } else {
-                command.stdout(Stdio::piped());
-            }
-
-            let mut child = command
-                .spawn()
-                .map_err(|_| format!("{}: command not found", cmd))?;
+            let mut child =
+                spawn_external_pipeline_command(parsed, i, is_last, last, prev_stdout.take())?;
 
             if !is_last {
                 prev_stdout = child.stdout.take();
@@ -290,18 +249,11 @@ fn execute_pipeline(commands: &[redirection::ParsedCommand]) -> std::result::Res
         }
     }
 
-    if let Some(last_child) = children.last_mut()
-        && last.redirect_stdout.is_none()
+    if last.redirect_stdout.is_none()
+        && let Some(last_child) = children.last_mut()
         && let Some(mut stdout) = last_child.stdout.take()
     {
-        let mut buf = [0u8; 1024];
-        while let Ok(n) = stdout.read(&mut buf) {
-            if n == 0 {
-                break;
-            }
-            let _ = std::io::stdout().write_all(&buf[..n]);
-            let _ = std::io::stdout().flush();
-        }
+        stream_to_stdout(&mut stdout);
     }
 
     for child in &mut children {
@@ -309,4 +261,100 @@ fn execute_pipeline(commands: &[redirection::ParsedCommand]) -> std::result::Res
     }
 
     Ok(())
+}
+
+fn flush_pipeline_processes(
+    children: &mut Vec<std::process::Child>,
+    prev_stdout: &mut Option<std::process::ChildStdout>,
+) {
+    for child in children.iter_mut() {
+        let _ = child.wait();
+    }
+    children.clear();
+    drop(prev_stdout.take());
+}
+
+fn write_builtin_pipeline_output(
+    output: &std::result::Result<String, String>,
+    last: &redirection::ParsedCommand,
+) {
+    if let Ok(content) = output {
+        if let Some(ref r) = last.redirect_stdout {
+            let _ = redirection::write_to_file(&r.file, content, r.append);
+        } else {
+            print!("{}", content);
+        }
+    }
+}
+
+fn spawn_builtin_feeder(
+    output: &std::result::Result<String, String>,
+    children: &mut Vec<std::process::Child>,
+) -> std::result::Result<Option<std::process::ChildStdout>, String> {
+    if let Ok(content) = output {
+        use std::io::Write;
+
+        let mut feeder = Command::new("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .map_err(|_| "Failed to spawn cat".to_string())?;
+
+        if let Some(mut stdin) = feeder.stdin.take() {
+            let _ = stdin.write_all(content.as_bytes());
+        }
+
+        let stdout = feeder.stdout.take();
+        children.push(feeder);
+        Ok(stdout)
+    } else {
+        Ok(None)
+    }
+}
+
+fn spawn_external_pipeline_command(
+    parsed: &redirection::ParsedCommand,
+    index: usize,
+    is_last: bool,
+    last: &redirection::ParsedCommand,
+    prev_stdout: Option<std::process::ChildStdout>,
+) -> std::result::Result<std::process::Child, String> {
+    let cmd = &parsed.args[0];
+    let mut command = Command::new(cmd);
+    command.args(&parsed.args[1..]);
+
+    if let Some(stdout) = prev_stdout {
+        command.stdin(Stdio::from(stdout));
+    } else if index > 0 {
+        command.stdin(Stdio::inherit());
+    }
+
+    if is_last {
+        if let Some(ref r) = last.redirect_stdout {
+            if let Ok(file) = open_file(&r.file, r.append) {
+                command.stdout(file);
+            }
+        } else {
+            command.stdout(Stdio::piped());
+        }
+    } else {
+        command.stdout(Stdio::piped());
+    }
+
+    command
+        .spawn()
+        .map_err(|_| format!("{}: command not found", cmd))
+}
+
+fn stream_to_stdout(stdout: &mut std::process::ChildStdout) {
+    use std::io::{Read, Write};
+
+    let mut buf = [0u8; 1024];
+    while let Ok(n) = stdout.read(&mut buf) {
+        if n == 0 {
+            break;
+        }
+        let _ = std::io::stdout().write_all(&buf[..n]);
+        let _ = std::io::stdout().flush();
+    }
 }
